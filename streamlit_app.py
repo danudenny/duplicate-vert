@@ -63,10 +63,16 @@ def find_duplicate_vertices(geometry: BaseGeometry) -> Set[Tuple[float, float]]:
             seen.add(coord)
     return duplicates
 
-def plot_geometry(geometry: BaseGeometry, duplicates: Set[Tuple[float, float]]):
+def plot_geometry(geometry: BaseGeometry, duplicates: Set[Tuple[float, float]], title: str = "") -> folium.Map:
     """Create a folium map with geometry and duplicate points highlighted."""
     centroid = geometry.centroid
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=15)
+    
+    # Add title to map
+    if title:
+        title_html = f'<h4 style="text-align:center;">{title}</h4>'
+        m.get_root().html.add_child(folium.Element(title_html))
+    
     gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
     folium.GeoJson(gdf).add_to(m)
 
@@ -86,15 +92,10 @@ def plot_geometry(geometry: BaseGeometry, duplicates: Set[Tuple[float, float]]):
 def remove_duplicates_from_geometry(geometry: BaseGeometry) -> BaseGeometry:
     """Remove duplicate vertices from a geometry using shapely.remove_repeated_points."""
     if geometry.geom_type == 'Polygon':
-        # Convert Polygon exterior and interiors to LineString
         exterior = LineString(geometry.exterior)
         interiors = [LineString(interior) for interior in geometry.interiors]
-
-        # Remove duplicate points from exterior and interiors
         exterior_cleaned = remove_repeated_points(exterior)
         interiors_cleaned = [remove_repeated_points(interior) for interior in interiors]
-
-        # Convert back to Polygon
         return Polygon(exterior_cleaned, interiors_cleaned)
 
     elif geometry.geom_type == 'LineString':
@@ -113,11 +114,23 @@ def main():
     st.title("GeoJSON Duplicate Vertices Detector")
     st.write("Upload a GeoJSON file to detect and remove duplicate vertices in geometries.")
 
+    # Initialize session state
+    if 'original_data' not in st.session_state:
+        st.session_state.original_data = None
+    if 'cleaned_data' not in st.session_state:
+        st.session_state.cleaned_data = None
+
     uploaded_file = st.file_uploader("Choose a GeoJSON file", type=['geojson'])
 
     if uploaded_file is not None:
         try:
-            gdf = gpd.read_file(uploaded_file)
+            # Only load the file if it's new or if there's no data loaded
+            if st.session_state.original_data is None:
+                gdf = gpd.read_file(uploaded_file)
+                st.session_state.original_data = gdf
+                st.session_state.cleaned_data = None  # Reset cleaned data when new file is uploaded
+            else:
+                gdf = st.session_state.original_data
 
             results = []
             total_duplicates = 0
@@ -160,10 +173,7 @@ def main():
 
                 df = pd.DataFrame(results)
 
-                # Drop geometry column for display
-                display_df = df.drop(columns=['geometry', 'duplicate_coordinates'])
-
-                # **Summary Section**
+                # Summary Section
                 st.subheader("Summary of Duplicate Vertices")
                 total_with_duplicates = len(df)
                 percentage_with_duplicates = (total_with_duplicates / total_features) * 100 if total_features > 0 else 0
@@ -180,63 +190,82 @@ def main():
                 summary_df = pd.DataFrame(summary_data.items(), columns=["Metric", "Value"])
                 st.table(summary_df)
 
-                # **Remove Duplicates Button for All Features**
-                if st.button("Remove Duplicate Vertices from All Features"):
-                    with st.spinner("Removing duplicates from all features..."):
-                        cleaned_results = []
-                        for idx, row in df.iterrows():
-                            cleaned_geometry = remove_duplicates_from_geometry(row['geometry'])
-                            cleaned_duplicates = find_duplicate_vertices(cleaned_geometry)
+                # Remove Duplicates Button
+                if st.button("Remove Duplicate Vertices from All Features") or st.session_state.cleaned_data is not None:
+                    if st.session_state.cleaned_data is None:
+                        with st.spinner("Removing duplicates from all features..."):
+                            cleaned_results = []
+                            for idx, row in df.iterrows():
+                                cleaned_geometry = remove_duplicates_from_geometry(row['geometry'])
+                                cleaned_duplicates = find_duplicate_vertices(cleaned_geometry)
 
-                            cleaned_result = {
-                                'feature_id': row['feature_id'],
-                                'duplicate_count': len(cleaned_duplicates),
-                                'duplicate_coordinates': list(cleaned_duplicates),
-                                'geometry_type': cleaned_geometry.geom_type,
-                                'geometry': cleaned_geometry,
-                                **{k: v for k, v in row.items() if k not in ['geometry', 'duplicate_count', 'duplicate_coordinates']}
-                            }
-                            cleaned_results.append(cleaned_result)
+                                cleaned_result = {
+                                    'feature_id': row['feature_id'],
+                                    'duplicate_count': len(cleaned_duplicates),
+                                    'duplicate_coordinates': list(cleaned_duplicates),
+                                    'geometry_type': cleaned_geometry.geom_type,
+                                    'geometry': cleaned_geometry,
+                                    **{k: v for k, v in row.items() if k not in ['geometry', 'duplicate_count', 'duplicate_coordinates']}
+                                }
+                                cleaned_results.append(cleaned_result)
 
-                        # Update the DataFrame with cleaned results
-                        df = pd.DataFrame(cleaned_results)
-                        st.success("Duplicate vertices removed from all features!")
+                            # Store cleaned results in session state
+                            st.session_state.cleaned_data = pd.DataFrame(cleaned_results)
+                            st.success("Duplicate vertices removed from all features!")
 
-                        # Update the summary
-                        total_duplicates = df['duplicate_count'].sum()
-                        max_duplicates = df['duplicate_count'].max()
-                        min_duplicates = df['duplicate_count'].min()
-                        total_with_duplicates = len(df[df['duplicate_count'] > 0])
-                        percentage_with_duplicates = (total_with_duplicates / total_features) * 100 if total_features > 0 else 0
+                    # Feature Selection for Visualization
+                    st.subheader("Select a feature to visualize")
+                    selected_index = st.selectbox("Feature ID", df['feature_id'].tolist())
 
-                        summary_data = {
-                            "Total Features": total_features,
-                            "Total Features with Duplicates": total_with_duplicates,
-                            "Total Duplicate Vertices": total_duplicates,
-                            "Percentage of Features with Duplicates": f"{percentage_with_duplicates:.2f}%",
-                            "Max Duplicate Vertices in a Feature": max_duplicates,
-                            "Min Duplicate Vertices in a Feature": min_duplicates if min_duplicates != float('inf') else 0
-                        }
+                    # Find selected rows from both original and cleaned data
+                    original_row = df[df['feature_id'] == selected_index].iloc[0]
+                    cleaned_row = st.session_state.cleaned_data[
+                        st.session_state.cleaned_data['feature_id'] == selected_index
+                    ].iloc[0]
 
-                        summary_df = pd.DataFrame(summary_data.items(), columns=["Metric", "Value"])
-                        st.table(summary_df)
+                    # Create two columns for side-by-side map display
+                    col1, col2 = st.columns(2)
 
-                        # Allow downloading the cleaned GeoJSON
-                        cleaned_gdf = gpd.GeoDataFrame(df.drop(columns=['duplicate_coordinates']), geometry='geometry')
-                        cleaned_geojson = cleaned_gdf.to_json()
-                        st.download_button("Download Cleaned GeoJSON", cleaned_geojson, "cleaned_geojson.geojson", "application/geo+json")
+                    with col1:
+                        st.subheader("Original Geometry")
+                        m1 = plot_geometry(
+                            original_row['geometry'], 
+                            set(original_row['duplicate_coordinates']),
+                            "Original"
+                        )
+                        folium_static(m1)
 
-                # **Feature Selection for Visualization**
-                st.subheader("Select a feature to visualize")
-                selected_index = st.selectbox("Feature ID", df['feature_id'].tolist())
+                    with col2:
+                        st.subheader("Cleaned Geometry")
+                        m2 = plot_geometry(
+                            cleaned_row['geometry'], 
+                            set(cleaned_row['duplicate_coordinates']),
+                            "After Cleaning"
+                        )
+                        folium_static(m2)
 
-                # Find selected row
-                selected_row = df[df['feature_id'] == selected_index].iloc[0]
+                    # Display comparison metrics
+                    st.subheader("Comparison Metrics")
+                    comparison_data = {
+                        "Metric": ["Duplicate Vertices Count"],
+                        "Original": [original_row['duplicate_count']],
+                        "After Cleaning": [cleaned_row['duplicate_count']],
+                        "Difference": [original_row['duplicate_count'] - cleaned_row['duplicate_count']]
+                    }
+                    st.table(pd.DataFrame(comparison_data))
 
-                # Display folium map
-                st.subheader(f"Feature {selected_index} Geometry Plot")
-                m = plot_geometry(selected_row['geometry'], set(selected_row['duplicate_coordinates']))
-                folium_static(m)
+                    # Allow downloading the cleaned GeoJSON
+                    cleaned_gdf = gpd.GeoDataFrame(
+                        st.session_state.cleaned_data.drop(columns=['duplicate_coordinates']), 
+                        geometry='geometry'
+                    )
+                    cleaned_geojson = cleaned_gdf.to_json()
+                    st.download_button(
+                        "Download Cleaned GeoJSON",
+                        cleaned_geojson,
+                        "cleaned_geojson.geojson",
+                        "application/geo+json"
+                    )
 
                 # Display DataFrame of duplicate vertices
                 st.subheader("Duplicate Vertices Summary")
@@ -245,7 +274,12 @@ def main():
 
                 # Allow downloading the results as CSV
                 csv = df.drop(columns=['geometry']).to_csv(index=False)
-                st.download_button("Download results as CSV", csv, "duplicate_vertices_results.csv", "text/csv")
+                st.download_button(
+                    "Download results as CSV",
+                    csv,
+                    "duplicate_vertices_results.csv",
+                    "text/csv"
+                )
 
             else:
                 st.success("No duplicate vertices found in the GeoJSON file!")
