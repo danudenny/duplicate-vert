@@ -8,6 +8,8 @@ from shapely.geometry.base import BaseGeometry
 from typing import List, Dict, Set, Tuple
 from shapely import remove_repeated_points
 
+st.set_page_config(layout="wide")
+
 def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float, float], int]]:
     """Extract all coordinates from a geometry with their index."""
     coords = []
