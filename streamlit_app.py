@@ -3,9 +3,10 @@ import geopandas as gpd
 import pandas as pd
 import folium
 from streamlit_folium import folium_static
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon, LineString, MultiLineString
 from shapely.geometry.base import BaseGeometry
 from typing import List, Dict, Set, Tuple
+from shapely.ops import remove_repeated_points
 
 def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float, float], int]]:
     """Extract all coordinates from a geometry with their index."""
@@ -81,6 +82,32 @@ def plot_geometry(geometry: BaseGeometry, duplicates: Set[Tuple[float, float]]):
                                 fill_opacity=0.8, popup=f"Vertex: {coord}").add_to(m)
 
     return m
+
+def remove_duplicates_from_geometry(geometry: BaseGeometry) -> BaseGeometry:
+    """Remove duplicate vertices from a geometry using shapely.remove_repeated_points."""
+    if geometry.geom_type == 'Polygon':
+        # Convert Polygon exterior and interiors to LineString
+        exterior = LineString(geometry.exterior)
+        interiors = [LineString(interior) for interior in geometry.interiors]
+
+        # Remove duplicate points from exterior and interiors
+        exterior_cleaned = remove_repeated_points(exterior)
+        interiors_cleaned = [remove_repeated_points(interior) for interior in interiors]
+
+        # Convert back to Polygon
+        return Polygon(exterior_cleaned, interiors_cleaned)
+
+    elif geometry.geom_type == 'LineString':
+        return remove_repeated_points(geometry)
+
+    elif geometry.geom_type == 'MultiLineString':
+        return MultiLineString([remove_repeated_points(line) for line in geometry.geoms])
+
+    elif geometry.geom_type == 'MultiPolygon':
+        return MultiPolygon([remove_duplicates_from_geometry(poly) for poly in geometry.geoms])
+
+    else:
+        return geometry
 
 def main():
     st.title("GeoJSON Duplicate Vertices Detector")
@@ -164,6 +191,26 @@ def main():
                 st.subheader(f"Feature {selected_index} Geometry Plot")
                 m = plot_geometry(selected_row['geometry'], set(selected_row['duplicate_coordinates']))
                 folium_static(m)
+
+                # **Remove Duplicates Button**
+                if st.button("Remove Duplicate Vertices"):
+                    cleaned_geometry = remove_duplicates_from_geometry(selected_row['geometry'])
+                    st.success("Duplicate vertices removed successfully!")
+
+                    # Update the map with the cleaned geometry
+                    st.subheader(f"Feature {selected_index} Cleaned Geometry Plot")
+                    m_cleaned = plot_geometry(cleaned_geometry, set())
+                    folium_static(m_cleaned)
+
+                    # Update the DataFrame with the cleaned geometry
+                    df.loc[df['feature_id'] == selected_index, 'geometry'] = cleaned_geometry
+                    df.loc[df['feature_id'] == selected_index, 'duplicate_count'] = 0
+                    df.loc[df['feature_id'] == selected_index, 'duplicate_coordinates'] = []
+
+                    # Allow downloading the updated GeoJSON
+                    updated_gdf = gpd.GeoDataFrame(df.drop(columns=['duplicate_coordinates']), geometry='geometry')
+                    updated_geojson = updated_gdf.to_json()
+                    st.download_button("Download Cleaned GeoJSON", updated_geojson, "cleaned_geojson.geojson", "application/geo+json")
 
                 # Display DataFrame of duplicate vertices
                 st.subheader("Duplicate Vertices Summary")
