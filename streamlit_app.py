@@ -209,7 +209,7 @@ def main():
                         st.success("Duplicate vertices removed from all features!")
 
                         # Rerun the app to reflect the changes
-                        st.experimental_rerun()
+                        st.rerun()
 
                 # **Feature Selection for Visualization**
                 st.subheader("Select a feature to visualize")
