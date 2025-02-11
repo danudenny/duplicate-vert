@@ -1,8 +1,7 @@
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
-import json
-from shapely.geometry import shape, mapping
+from shapely.geometry import mapping
 import numpy as np
 from typing import Tuple, List, Dict
 
@@ -54,7 +53,8 @@ def main():
             
             # Process each feature
             for idx, row in gdf.iterrows():
-                geom_dict = json.loads(row.geometry.to_json())
+                # Convert Shapely geometry to dictionary using mapping
+                geom_dict = mapping(row.geometry)
                 duplicates = find_duplicate_vertices(geom_dict)
                 
                 if duplicates:
