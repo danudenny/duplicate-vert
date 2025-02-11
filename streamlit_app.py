@@ -6,7 +6,7 @@ from typing import List, Dict, Set, Tuple
 from shapely.geometry.base import BaseGeometry
 
 def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float, float], int]]:
-    """Extract all coordinates from a geometry with their index."""
+    """Extract all coordinates from a geometry with their index, excluding duplicate start-end for closed geometries."""
     coords = []
     idx = 0
     
@@ -14,16 +14,35 @@ def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float
         coords.append((tuple(geometry.coords[0])[:2], idx))
     
     elif geometry.geom_type in ['LineString', 'LinearRing']:
-        for coord in geometry.coords:
+        unique_coords = list(geometry.coords)
+        
+        # Remove last coordinate if it is the same as the first (closed ring)
+        if geometry.geom_type == 'LinearRing' or (geometry.geom_type == 'LineString' and unique_coords[0] == unique_coords[-1]):
+            unique_coords.pop()
+        
+        for coord in unique_coords:
             coords.append((tuple(coord)[:2], idx))
             idx += 1
     
     elif geometry.geom_type == 'Polygon':
-        for coord in geometry.exterior.coords:
+        exterior_coords = list(geometry.exterior.coords)
+        
+        # Remove last coordinate if it is the same as the first (closed ring)
+        if exterior_coords[0] == exterior_coords[-1]:
+            exterior_coords.pop()
+        
+        for coord in exterior_coords:
             coords.append((tuple(coord)[:2], idx))
             idx += 1
+        
         for interior in geometry.interiors:
-            for coord in interior.coords:
+            interior_coords = list(interior.coords)
+            
+            # Remove last coordinate if it is the same as the first (closed ring)
+            if interior_coords[0] == interior_coords[-1]:
+                interior_coords.pop()
+            
+            for coord in interior_coords:
                 coords.append((tuple(coord)[:2], idx))
                 idx += 1
     
@@ -34,6 +53,7 @@ def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float
             idx += len(part_coords)
     
     return coords
+
 
 def find_duplicate_vertices(geometry: BaseGeometry) -> Set[Tuple[float, float]]:
     """Find duplicate vertices in a geometry using exact coordinate matching."""
