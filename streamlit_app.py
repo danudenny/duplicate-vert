@@ -117,7 +117,13 @@ def main():
 
     if uploaded_file is not None:
         try:
-            gdf = gpd.read_file(uploaded_file)
+            # Initialize session state if not already done
+            if 'original_gdf' not in st.session_state:
+                st.session_state.original_gdf = gpd.read_file(uploaded_file)
+                st.session_state.cleaned_gdf = None
+
+            # Use the cleaned DataFrame if it exists, otherwise use the original
+            gdf = st.session_state.cleaned_gdf if st.session_state.cleaned_gdf is not None else st.session_state.original_gdf
 
             results = []
             total_duplicates = 0
@@ -198,33 +204,12 @@ def main():
                             }
                             cleaned_results.append(cleaned_result)
 
-                        # Update the DataFrame with cleaned results
-                        df = pd.DataFrame(cleaned_results)
+                        # Update the session state with the cleaned DataFrame
+                        st.session_state.cleaned_gdf = gpd.GeoDataFrame(cleaned_results, geometry='geometry')
                         st.success("Duplicate vertices removed from all features!")
 
-                        # Update the summary
-                        total_duplicates = df['duplicate_count'].sum()
-                        max_duplicates = df['duplicate_count'].max()
-                        min_duplicates = df['duplicate_count'].min()
-                        total_with_duplicates = len(df[df['duplicate_count'] > 0])
-                        percentage_with_duplicates = (total_with_duplicates / total_features) * 100 if total_features > 0 else 0
-
-                        summary_data = {
-                            "Total Features": total_features,
-                            "Total Features with Duplicates": total_with_duplicates,
-                            "Total Duplicate Vertices": total_duplicates,
-                            "Percentage of Features with Duplicates": f"{percentage_with_duplicates:.2f}%",
-                            "Max Duplicate Vertices in a Feature": max_duplicates,
-                            "Min Duplicate Vertices in a Feature": min_duplicates if min_duplicates != float('inf') else 0
-                        }
-
-                        summary_df = pd.DataFrame(summary_data.items(), columns=["Metric", "Value"])
-                        st.table(summary_df)
-
-                        # Allow downloading the cleaned GeoJSON
-                        cleaned_gdf = gpd.GeoDataFrame(df.drop(columns=['duplicate_coordinates']), geometry='geometry')
-                        cleaned_geojson = cleaned_gdf.to_json()
-                        st.download_button("Download Cleaned GeoJSON", cleaned_geojson, "cleaned_geojson.geojson", "application/geo+json")
+                        # Rerun the app to reflect the changes
+                        st.experimental_rerun()
 
                 # **Feature Selection for Visualization**
                 st.subheader("Select a feature to visualize")
@@ -246,6 +231,11 @@ def main():
                 # Allow downloading the results as CSV
                 csv = df.drop(columns=['geometry']).to_csv(index=False)
                 st.download_button("Download results as CSV", csv, "duplicate_vertices_results.csv", "text/csv")
+
+                # Allow downloading the cleaned GeoJSON
+                if st.session_state.cleaned_gdf is not None:
+                    cleaned_geojson = st.session_state.cleaned_gdf.to_json()
+                    st.download_button("Download Cleaned GeoJSON", cleaned_geojson, "cleaned_geojson.geojson", "application/geo+json")
 
             else:
                 st.success("No duplicate vertices found in the GeoJSON file!")
