@@ -8,7 +8,7 @@ from shapely.geometry.base import BaseGeometry
 from typing import List, Dict, Set, Tuple
 
 def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float, float], int]]:
-    """Extract all coordinates from a geometry with their index, excluding duplicate start-end for closed geometries."""
+    """Extract all coordinates from a geometry with their index."""
     coords = []
     idx = 0
 
@@ -17,32 +17,24 @@ def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float
 
     elif geometry.geom_type in ['LineString', 'LinearRing']:
         unique_coords = list(geometry.coords)
-
-        # Remove last coordinate if it is the same as the first (closed ring)
-        if unique_coords[0] == unique_coords[-1]:
+        if unique_coords[0] == unique_coords[-1]:  
             unique_coords.pop()
-
         for coord in unique_coords:
             coords.append((tuple(coord)[:2], idx))
             idx += 1
 
     elif geometry.geom_type == 'Polygon':
         exterior_coords = list(geometry.exterior.coords)
-
-        # Remove last coordinate if it is the same as the first (closed ring)
         if exterior_coords[0] == exterior_coords[-1]:
             exterior_coords.pop()
-
         for coord in exterior_coords:
             coords.append((tuple(coord)[:2], idx))
             idx += 1
 
         for interior in geometry.interiors:
             interior_coords = list(interior.coords)
-
             if interior_coords[0] == interior_coords[-1]:
                 interior_coords.pop()
-
             for coord in interior_coords:
                 coords.append((tuple(coord)[:2], idx))
                 idx += 1
@@ -58,30 +50,23 @@ def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float
 def find_duplicate_vertices(geometry: BaseGeometry) -> Set[Tuple[float, float]]:
     """Find duplicate vertices in a geometry using exact coordinate matching."""
     coords_with_index = get_coordinates_with_index(geometry)
-
     if not coords_with_index:
         return set()
 
     seen = set()
     duplicates = set()
-
     for coord, _ in coords_with_index:
         if coord in seen:
             duplicates.add(coord)
         else:
             seen.add(coord)
-
     return duplicates
 
 def plot_geometry(geometry: BaseGeometry, duplicates: Set[Tuple[float, float]]):
     """Create a folium map with geometry and duplicate points highlighted."""
     centroid = geometry.centroid
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=15)
-
-    # Convert geometry to a GeoDataFrame to plot
     gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
-
-    # Add geometry to map
     folium.GeoJson(gdf).add_to(m)
 
     # Plot duplicate vertices in red
@@ -108,6 +93,9 @@ def main():
             gdf = gpd.read_file(uploaded_file)
 
             results = []
+            total_duplicates = 0
+            max_duplicates = 0
+            min_duplicates = float('inf')
 
             with st.spinner("Processing features..."):
                 progress_bar = st.progress(0)
@@ -125,10 +113,14 @@ def main():
                                 'duplicate_count': len(duplicates),
                                 'duplicate_coordinates': list(duplicates),
                                 'geometry_type': row.geometry.geom_type,
-                                'geometry': row.geometry,  # Store for plotting
+                                'geometry': row.geometry,
                                 **properties
                             }
                             results.append(result)
+
+                            total_duplicates += len(duplicates)
+                            max_duplicates = max(max_duplicates, len(duplicates))
+                            min_duplicates = min(min_duplicates, len(duplicates))
 
                         progress = (idx + 1) / total_features
                         progress_bar.progress(progress)
@@ -144,7 +136,24 @@ def main():
                 # Drop geometry column for display
                 display_df = df.drop(columns=['geometry', 'duplicate_coordinates'])
 
-                # Create a selection box for choosing a row
+                # **Summary Section**
+                st.subheader("Summary of Duplicate Vertices")
+                total_with_duplicates = len(df)
+                percentage_with_duplicates = (total_with_duplicates / total_features) * 100 if total_features > 0 else 0
+
+                summary_data = {
+                    "Total Features": total_features,
+                    "Total Features with Duplicates": total_with_duplicates,
+                    "Total Duplicate Vertices": total_duplicates,
+                    "Percentage of Features with Duplicates": f"{percentage_with_duplicates:.2f}%",
+                    "Max Duplicate Vertices in a Feature": max_duplicates,
+                    "Min Duplicate Vertices in a Feature": min_duplicates if min_duplicates != float('inf') else 0
+                }
+
+                summary_df = pd.DataFrame(summary_data.items(), columns=["Metric", "Value"])
+                st.table(summary_df)
+
+                # **Feature Selection for Visualization**
                 st.subheader("Select a feature to visualize")
                 selected_index = st.selectbox("Feature ID", df['feature_id'].tolist())
 
