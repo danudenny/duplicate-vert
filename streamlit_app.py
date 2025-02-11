@@ -89,7 +89,7 @@ def display_data_stats(gdf: gpd.GeoDataFrame, results: List[Dict]):
         )
     
     with col3:
-        duplicate_percentage = (len(results) / len(gdf) * 100 if len(gdf) > 0 else 0
+        duplicate_percentage = (len(results) / len(gdf)) * 100 if len(gdf) > 0 else 0
         st.metric(
             label="Percentage with Duplicates",
             value=f"{duplicate_percentage:.1f}%",
