@@ -2,7 +2,6 @@ import streamlit as st
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Point
-from shapely.strtree import STRtree
 from typing import List, Dict, Set, Tuple
 from shapely.geometry.base import BaseGeometry
 
@@ -36,37 +35,22 @@ def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float
     
     return coords
 
-def find_duplicate_vertices_with_strtree(geometry: BaseGeometry, tolerance: float = 1e-8) -> Set[Tuple[float, float]]:
-    """Find duplicate vertices in a geometry using STRtree for faster processing."""
+def find_duplicate_vertices(geometry: BaseGeometry) -> Set[Tuple[float, float]]:
+    """Find duplicate vertices in a geometry using exact coordinate matching."""
     coords_with_index = get_coordinates_with_index(geometry)
     
     if not coords_with_index:
         return set()
     
-    # Create points for STRtree
-    points = [Point(coord[0]) for coord in coords_with_index]
-    tree = STRtree(points)
-    
+    # Track seen coordinates and duplicates
+    seen = set()
     duplicates = set()
-    processed = set()
     
-    for i, (coord, idx) in enumerate(coords_with_index):
-        if coord in processed:
-            continue
-            
-        point = points[i]
-        # Query nearby points within the tolerance
-        nearby_points = tree.query(point.buffer(tolerance))
-        
-        # Check if any nearby points are within the tolerance
-        for j in nearby_points:
-            if j != i:  # Skip self
-                nearby_coord = coords_with_index[j][0]
-                if point.distance(points[j]) <= tolerance:
-                    duplicates.add(coord)
-                    duplicates.add(nearby_coord)
-        
-        processed.add(coord)
+    for coord, _ in coords_with_index:
+        if coord in seen:
+            duplicates.add(coord)
+        else:
+            seen.add(coord)
     
     return duplicates
 
@@ -109,16 +93,6 @@ def main():
     st.title("GeoJSON Duplicate Vertices Detector")
     st.write("Upload a GeoJSON file to detect duplicate vertices in geometries")
     
-    # Add tolerance parameter
-    tolerance = st.slider(
-        "Coordinate matching tolerance (decimal degrees)",
-        min_value=1e-10,
-        max_value=1e-6,
-        value=1e-8,
-        format="%.0e",
-        help="Vertices within this distance will be considered duplicates"
-    )
-    
     # File uploader
     uploaded_file = st.file_uploader("Choose a GeoJSON file", type=['geojson'])
     
@@ -137,8 +111,8 @@ def main():
                 
                 for idx, row in gdf.iterrows():
                     try:
-                        # Find duplicates using STRtree
-                        duplicates = find_duplicate_vertices_with_strtree(row.geometry, tolerance)
+                        # Find duplicates using exact matching
+                        duplicates = find_duplicate_vertices(row.geometry)
                         
                         if duplicates:
                             # Get all properties from the feature
