@@ -1,57 +1,38 @@
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import mapping, Point
+from shapely.geometry import Point
 from shapely.strtree import STRtree
-import numpy as np
-from typing import Tuple, List, Dict, Set
+from typing import List, Dict, Set
 from shapely.geometry.base import BaseGeometry
 
 def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float, float], int]]:
     """Extract all coordinates from a geometry with their index."""
     coords = []
-    coords_set = set()  # To track unique coordinates
     idx = 0
     
-    # Handle different geometry types
     if geometry.geom_type == 'Point':
-        coord_tuple = tuple(geometry.coords[0])[:2]
-        coords.append((coord_tuple, idx))
-        coords_set.add(coord_tuple)
+        coords.append((tuple(geometry.coords[0])[:2], idx))
     
     elif geometry.geom_type in ['LineString', 'LinearRing']:
         for coord in geometry.coords:
-            coord_tuple = tuple(coord)[:2]
-            if coord_tuple not in coords_set:
-                coords.append((coord_tuple, idx))
-                coords_set.add(coord_tuple)
+            coords.append((tuple(coord)[:2], idx))
             idx += 1
     
     elif geometry.geom_type == 'Polygon':
-        # Process exterior ring
         for coord in geometry.exterior.coords:
-            coord_tuple = tuple(coord)[:2]
-            if coord_tuple not in coords_set:
-                coords.append((coord_tuple, idx))
-                coords_set.add(coord_tuple)
+            coords.append((tuple(coord)[:2], idx))
             idx += 1
-        # Process interior rings
         for interior in geometry.interiors:
             for coord in interior.coords:
-                coord_tuple = tuple(coord)[:2]
-                if coord_tuple not in coords_set:
-                    coords.append((coord_tuple, idx))
-                    coords_set.add(coord_tuple)
+                coords.append((tuple(coord)[:2], idx))
                 idx += 1
     
     elif geometry.geom_type in ['MultiPoint', 'MultiLineString', 'MultiPolygon']:
         for part in geometry.geoms:
             part_coords = get_coordinates_with_index(part)
-            for coord, _ in part_coords:
-                if coord not in coords_set:
-                    coords.append((coord, idx))
-                    coords_set.add(coord)
-                idx += 1
+            coords.extend(part_coords)
+            idx += len(part_coords)
     
     return coords
 
@@ -74,22 +55,16 @@ def find_duplicate_vertices_with_strtree(geometry: BaseGeometry, tolerance: floa
             continue
             
         point = points[i]
-        # Query nearby points
-        nearby_idxs = tree.query(point.buffer(tolerance))
+        # Query nearby points within the tolerance
+        nearby_points = tree.query(point.buffer(tolerance))
         
-        # Count occurrences
-        nearby_coords = set()
-        for j in nearby_idxs:
+        # Check if any nearby points are within the tolerance
+        for j in nearby_points:
             if j != i:  # Skip self
                 nearby_coord = coords_with_index[j][0]
-                # Check if truly duplicate (within tolerance)
-                dx = abs(coord[0] - nearby_coord[0])
-                dy = abs(coord[1] - nearby_coord[1])
-                if dx <= tolerance and dy <= tolerance:
-                    nearby_coords.add(coord)
-        
-        if nearby_coords:
-            duplicates.update(nearby_coords)
+                if point.distance(points[j]) <= tolerance:
+                    duplicates.add(coord)
+                    duplicates.add(nearby_coord)
         
         processed.add(coord)
     
@@ -114,7 +89,7 @@ def display_data_stats(gdf: gpd.GeoDataFrame, results: List[Dict]):
         )
     
     with col3:
-        duplicate_percentage = (len(results) / len(gdf) * 100) if len(gdf) > 0 else 0
+        duplicate_percentage = (len(results) / len(gdf) * 100 if len(gdf) > 0 else 0
         st.metric(
             label="Percentage with Duplicates",
             value=f"{duplicate_percentage:.1f}%",
