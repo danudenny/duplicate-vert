@@ -3,7 +3,7 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Point
 from shapely.strtree import STRtree
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Tuple
 from shapely.geometry.base import BaseGeometry
 
 def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float, float], int]]:
