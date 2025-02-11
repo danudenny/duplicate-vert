@@ -6,7 +6,7 @@ from streamlit_folium import folium_static
 from shapely.geometry import Point, Polygon, LineString, MultiLineString
 from shapely.geometry.base import BaseGeometry
 from typing import List, Dict, Set, Tuple
-from shapely.ops import remove_repeated_points
+from shapely import remove_repeated_points
 
 def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float, float], int]]:
     """Extract all coordinates from a geometry with their index."""
