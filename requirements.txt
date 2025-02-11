@@ -3,4 +3,5 @@ geopandas
 pandas
 shapely
 numpy
+streamlit_folium
 folium
