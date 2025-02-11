@@ -1,40 +1,93 @@
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import mapping
+from shapely.geometry import mapping, Point
+from shapely.strtree import STRtree
 import numpy as np
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Set
+from shapely.geometry.base import BaseGeometry
 
-def get_coordinates_list(geometry: Dict) -> List[Tuple[float, float]]:
-    """Extract all coordinates from a geometry as a list of tuples."""
+def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float, float], int]]:
+    """Extract all coordinates from a geometry with their index."""
     coords = []
+    coords_set = set()  # To track unique coordinates
+    idx = 0
     
-    if geometry['type'] == 'Point':
-        coords.append(tuple(geometry['coordinates']))
-    elif geometry['type'] in ['LineString', 'MultiPoint']:
-        coords.extend([tuple(c) for c in geometry['coordinates']])
-    elif geometry['type'] in ['Polygon', 'MultiLineString']:
-        for line in geometry['coordinates']:
-            coords.extend([tuple(c) for c in line])
-    elif geometry['type'] == 'MultiPolygon':
-        for polygon in geometry['coordinates']:
-            for line in polygon:
-                coords.extend([tuple(c) for c in line])
+    # Get coordinates based on geometry type
+    if hasattr(geometry, 'coords'):
+        # Point, LineString
+        for coord in geometry.coords:
+            coord_tuple = tuple(coord)[:2]  # Take only x,y coordinates
+            if coord_tuple not in coords_set:
+                coords.append((coord_tuple, idx))
+                coords_set.add(coord_tuple)
+            idx += 1
+    elif hasattr(geometry, 'geoms'):
+        # MultiPoint, MultiLineString, MultiPolygon
+        for geom in geometry.geoms:
+            for coord in geom.coords:
+                coord_tuple = tuple(coord)[:2]
+                if coord_tuple not in coords_set:
+                    coords.append((coord_tuple, idx))
+                    coords_set.add(coord_tuple)
+                idx += 1
+    elif hasattr(geometry, 'exterior'):
+        # Polygon
+        for coord in geometry.exterior.coords:
+            coord_tuple = tuple(coord)[:2]
+            if coord_tuple not in coords_set:
+                coords.append((coord_tuple, idx))
+                coords_set.add(coord_tuple)
+            idx += 1
+        for interior in geometry.interiors:
+            for coord in interior.coords:
+                coord_tuple = tuple(coord)[:2]
+                if coord_tuple not in coords_set:
+                    coords.append((coord_tuple, idx))
+                    coords_set.add(coord_tuple)
+                idx += 1
     
     return coords
 
-def find_duplicate_vertices(geometry: Dict) -> List[Tuple[float, float]]:
-    """Find duplicate vertices in a geometry."""
-    coords = get_coordinates_list(geometry)
-    # Convert to numpy array for faster processing
-    coords_array = np.array(coords)
+def find_duplicate_vertices_with_strtree(geometry: BaseGeometry, tolerance: float = 1e-8) -> Set[Tuple[float, float]]:
+    """Find duplicate vertices in a geometry using STRtree for faster processing."""
+    coords_with_index = get_coordinates_with_index(geometry)
     
-    # Find duplicates using numpy
-    unique_coords, counts = np.unique(coords_array, axis=0, return_counts=True)
-    duplicate_mask = counts > 1
-    duplicates = unique_coords[duplicate_mask].tolist()
+    if not coords_with_index:
+        return set()
     
-    return [tuple(coord) for coord in duplicates]
+    # Create points for STRtree
+    points = [Point(coord[0]) for coord in coords_with_index]
+    tree = STRtree(points)
+    
+    duplicates = set()
+    processed = set()
+    
+    for i, (coord, idx) in enumerate(coords_with_index):
+        if coord in processed:
+            continue
+            
+        point = points[i]
+        # Query nearby points
+        nearby_idxs = tree.query(point.buffer(tolerance))
+        
+        # Count occurrences
+        nearby_coords = set()
+        for j in nearby_idxs:
+            if j != i:  # Skip self
+                nearby_coord = coords_with_index[j][0]
+                # Check if truly duplicate (within tolerance)
+                dx = abs(coord[0] - nearby_coord[0])
+                dy = abs(coord[1] - nearby_coord[1])
+                if dx <= tolerance and dy <= tolerance:
+                    nearby_coords.add(coord)
+        
+        if nearby_coords:
+            duplicates.update(nearby_coords)
+        
+        processed.add(coord)
+    
+    return duplicates
 
 def display_data_stats(gdf: gpd.GeoDataFrame, results: List[Dict]):
     """Display statistics about the uploaded data."""
@@ -75,6 +128,16 @@ def main():
     st.title("GeoJSON Duplicate Vertices Detector")
     st.write("Upload a GeoJSON file to detect duplicate vertices in geometries")
     
+    # Add tolerance parameter
+    tolerance = st.slider(
+        "Coordinate matching tolerance (decimal degrees)",
+        min_value=1e-10,
+        max_value=1e-6,
+        value=1e-8,
+        format="%.0e",
+        help="Vertices within this distance will be considered duplicates"
+    )
+    
     # File uploader
     uploaded_file = st.file_uploader("Choose a GeoJSON file", type=['geojson'])
     
@@ -88,10 +151,12 @@ def main():
             
             # Process each feature
             with st.spinner("Processing features..."):
+                progress_bar = st.progress(0)
+                total_features = len(gdf)
+                
                 for idx, row in gdf.iterrows():
-                    # Convert Shapely geometry to dictionary using mapping
-                    geom_dict = mapping(row.geometry)
-                    duplicates = find_duplicate_vertices(geom_dict)
+                    # Find duplicates using STRtree
+                    duplicates = find_duplicate_vertices_with_strtree(row.geometry, tolerance)
                     
                     if duplicates:
                         # Get all properties from the feature
@@ -101,11 +166,15 @@ def main():
                         result = {
                             'feature_id': idx,
                             'duplicate_count': len(duplicates),
-                            'duplicate_coordinates': duplicates,
+                            'duplicate_coordinates': list(duplicates),
                             'geometry_type': row.geometry.type,
                             **properties  # Include all other properties
                         }
                         results.append(result)
+                    
+                    # Update progress
+                    progress = (idx + 1) / total_features
+                    progress_bar.progress(progress)
             
             # Display data statistics
             st.header("Data Summary")
