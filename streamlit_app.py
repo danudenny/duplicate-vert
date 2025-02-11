@@ -13,38 +13,44 @@ def get_coordinates_with_index(geometry: BaseGeometry) -> List[Tuple[Tuple[float
     coords_set = set()  # To track unique coordinates
     idx = 0
     
-    # Get coordinates based on geometry type
-    if hasattr(geometry, 'coords'):
-        # Point, LineString
+    # Handle different geometry types
+    if geometry.geom_type == 'Point':
+        coord_tuple = tuple(geometry.coords[0])[:2]
+        coords.append((coord_tuple, idx))
+        coords_set.add(coord_tuple)
+    
+    elif geometry.geom_type in ['LineString', 'LinearRing']:
         for coord in geometry.coords:
-            coord_tuple = tuple(coord)[:2]  # Take only x,y coordinates
+            coord_tuple = tuple(coord)[:2]
             if coord_tuple not in coords_set:
                 coords.append((coord_tuple, idx))
                 coords_set.add(coord_tuple)
             idx += 1
-    elif hasattr(geometry, 'geoms'):
-        # MultiPoint, MultiLineString, MultiPolygon
-        for geom in geometry.geoms:
-            for coord in geom.coords:
-                coord_tuple = tuple(coord)[:2]
-                if coord_tuple not in coords_set:
-                    coords.append((coord_tuple, idx))
-                    coords_set.add(coord_tuple)
-                idx += 1
-    elif hasattr(geometry, 'exterior'):
-        # Polygon
+    
+    elif geometry.geom_type == 'Polygon':
+        # Process exterior ring
         for coord in geometry.exterior.coords:
             coord_tuple = tuple(coord)[:2]
             if coord_tuple not in coords_set:
                 coords.append((coord_tuple, idx))
                 coords_set.add(coord_tuple)
             idx += 1
+        # Process interior rings
         for interior in geometry.interiors:
             for coord in interior.coords:
                 coord_tuple = tuple(coord)[:2]
                 if coord_tuple not in coords_set:
                     coords.append((coord_tuple, idx))
                     coords_set.add(coord_tuple)
+                idx += 1
+    
+    elif geometry.geom_type in ['MultiPoint', 'MultiLineString', 'MultiPolygon']:
+        for part in geometry.geoms:
+            part_coords = get_coordinates_with_index(part)
+            for coord, _ in part_coords:
+                if coord not in coords_set:
+                    coords.append((coord, idx))
+                    coords_set.add(coord)
                 idx += 1
     
     return coords
@@ -155,26 +161,30 @@ def main():
                 total_features = len(gdf)
                 
                 for idx, row in gdf.iterrows():
-                    # Find duplicates using STRtree
-                    duplicates = find_duplicate_vertices_with_strtree(row.geometry, tolerance)
-                    
-                    if duplicates:
-                        # Get all properties from the feature
-                        properties = row.drop('geometry').to_dict()
+                    try:
+                        # Find duplicates using STRtree
+                        duplicates = find_duplicate_vertices_with_strtree(row.geometry, tolerance)
                         
-                        # Add result with all properties
-                        result = {
-                            'feature_id': idx,
-                            'duplicate_count': len(duplicates),
-                            'duplicate_coordinates': list(duplicates),
-                            'geometry_type': row.geometry.type,
-                            **properties  # Include all other properties
-                        }
-                        results.append(result)
-                    
-                    # Update progress
-                    progress = (idx + 1) / total_features
-                    progress_bar.progress(progress)
+                        if duplicates:
+                            # Get all properties from the feature
+                            properties = row.drop('geometry').to_dict()
+                            
+                            # Add result with all properties
+                            result = {
+                                'feature_id': idx,
+                                'duplicate_count': len(duplicates),
+                                'duplicate_coordinates': list(duplicates),
+                                'geometry_type': row.geometry.geom_type,
+                                **properties  # Include all other properties
+                            }
+                            results.append(result)
+                        
+                        # Update progress
+                        progress = (idx + 1) / total_features
+                        progress_bar.progress(progress)
+                    except Exception as e:
+                        st.warning(f"Skipping feature {idx} due to error: {str(e)}")
+                        continue
             
             # Display data statistics
             st.header("Data Summary")
@@ -205,11 +215,6 @@ def main():
                     file_name="duplicate_vertices_results.csv",
                     mime="text/csv"
                 )
-                
-                # Display map if coordinates are present
-                if not gdf.empty:
-                    st.subheader("Map View")
-                    st.map(gdf)
             
             else:
                 st.success("No duplicate vertices found in the GeoJSON file!")
